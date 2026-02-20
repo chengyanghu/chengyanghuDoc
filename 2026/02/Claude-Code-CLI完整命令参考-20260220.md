@@ -1,14 +1,14 @@
 # Claude Code CLI 完整命令参考 - 2026年02月
 
 > **📊 研究概况**
-> - 检索轮数：6 轮
-> - 参考来源：15 个官方文档
+> - 检索轮数：10 轮
+> - 参考来源：19 个官方文档
 > - 报告生成：2026-02-20
 > - 数据来源：Context7 官方文档
 
 ## 📋 执行摘要
 
-Claude Code CLI 是 Anthropic 官方命令行工具，支持通过终端与 Claude 进行交互式编程。本指南涵盖所有 CLI 命令、快捷键、配置选项、MCP 服务器集成、Hooks 自动化和 Skills 开发的完整实用参考，纯实操内容，无理论解释。
+Claude Code CLI 是 Anthropic 官方命令行工具，支持通过终端与 Claude 进行交互式编程。本指南涵盖所有 CLI 命令、快捷键、配置选项、MCP 服务器集成、Hooks 自动化、Skills 开发以及 **Agent Team 多智能体协作系统**的完整实用参考，纯实操内容，无理论解释。
 
 > **📎 参考来源**: [[1]](https://context7.com/anthropics/claude-code/llms.txt)
 
@@ -25,7 +25,8 @@ Claude Code CLI 是 Anthropic 官方命令行工具，支持通过终端与 Clau
 7. [Skills 开发](#7-skills-开发)
 8. [配置文件](#8-配置文件)
 9. [最佳实践](#9-最佳实践)
-10. [参考资料](#参考资料)
+10. [Agent Team 与多智能体协作](#10-agent-team-与多智能体协作)
+11. [参考资料](#参考资料)
 
 ---
 
@@ -699,6 +700,403 @@ description: 帮助用户做前端开发
 
 ---
 
+## 10. Agent Team 与多智能体协作
+
+### 10.1 Agent 基础概念
+
+**Agent 定义**：
+- Agent 是自主运行的子进程，可以独立处理复杂的多步骤任务
+- 与 Commands 的区别：Commands 由用户主动触发，Agents 自动根据上下文启动
+- Agents 使用 Markdown 文件格式，带 YAML frontmatter 配置
+
+> **📎 参考来源**: [[16]](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/agent-development/SKILL.md)
+
+### 10.2 Subagent 类型
+
+Claude Code 提供多种专用 subagent 类型：
+
+| Subagent 类型 | 可用工具 | 适用场景 |
+|--------------|---------|---------|
+| `general-purpose` | 所有工具 | 复杂任务、需要编辑和写入文件 |
+| `Bash` | Bash | Git 操作、命令执行、终端任务 |
+| `Explore` | Read, Grep, Glob | 代码库探索、文件搜索、快速查找 |
+| `Plan` | Read, Grep, Glob | 任务规划、架构设计（只读） |
+
+> **📎 参考来源**: [[16]](https://context7.com/anthropics/claude-code/llms.txt)
+
+### 10.3 Task Tool - 启动 Subagent
+
+#### 基本用法
+
+```json
+{
+  "subagent_type": "general-purpose",
+  "description": "分析对话找出问题行为",
+  "prompt": "分析最近 20-30 条消息，识别用户不希望出现的行为模式..."
+}
+```
+
+> **📎 参考来源**: [[17]](https://github.com/anthropics/claude-code/blob/main/plugins/hookify/commands/hookify.md)
+
+#### 完整参数
+
+```json
+{
+  "subagent_type": "Explore",
+  "description": "搜索认证相关代码",
+  "prompt": "在代码库中查找所有与用户认证相关的文件和函数",
+  "name": "auth-explorer",
+  "team_name": "feature-team",
+  "model": "sonnet",
+  "run_in_background": false,
+  "max_turns": 10
+}
+```
+
+**参数说明**：
+- `subagent_type`: 必需，选择 agent 类型
+- `description`: 简短描述（3-5 个字）
+- `prompt`: 详细任务说明
+- `name`: Agent 名称（可选）
+- `team_name`: 所属团队（可选）
+- `model`: 使用的模型（sonnet/opus/haiku）
+- `run_in_background`: 是否后台运行
+- `max_turns`: 最大轮次限制
+
+### 10.4 Multi-Agent Swarm 配置
+
+#### Agent 状态文件
+
+**文件**: `.claude/multi-agent-swarm.local.md`
+
+```markdown
+---
+agent_name: auth-implementation
+task_number: 3.5
+pr_number: 1234
+coordinator_session: team-leader
+enabled: true
+dependencies: ["Task 3.4"]
+additional_instructions: "Use JWT tokens, not sessions"
+---
+
+# Task: Implement Authentication
+
+Build JWT-based authentication for the REST API.
+
+## Requirements
+- JWT token generation and validation
+- Refresh token flow
+- Secure password hashing
+
+## Success Criteria
+- Auth endpoints implemented
+- Tests passing (100% coverage)
+- PR created and CI green
+- Documentation updated
+
+## Coordination
+Depends on Task 3.4 (user model).
+Report status to 'team-leader' session.
+```
+
+> **📎 参考来源**: [[18]](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-settings/SKILL.md)
+
+#### 创建 Agent 状态文件
+
+```bash
+cat > ".claude/multi-agent-swarm.local.md" <<EOF
+---
+agent_name: $AGENT_NAME
+task_number: $TASK_ID
+pr_number: TBD
+coordinator_session: $COORDINATOR_SESSION
+enabled: true
+dependencies: [$DEPENDENCIES]
+additional_instructions: "$EXTRA_INSTRUCTIONS"
+---
+
+# Task: $TASK_DESCRIPTION
+
+$TASK_DETAILS
+EOF
+```
+
+> **📎 参考来源**: [[19]](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-settings/references/real-world-examples.md)
+
+### 10.5 Agent Idle 通知 Hook
+
+当 agent 完成任务进入空闲状态时，自动通知 coordinator：
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+SWARM_STATE_FILE=".claude/multi-agent-swarm.local.md"
+
+# 快速退出检查
+if [[ ! -f "$SWARM_STATE_FILE" ]]; then
+  exit 0
+fi
+
+# 解析 frontmatter
+FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$SWARM_STATE_FILE")
+
+# 提取配置
+COORDINATOR_SESSION=$(echo "$FRONTMATTER" | grep '^coordinator_session:' | sed 's/coordinator_session: *//')
+AGENT_NAME=$(echo "$FRONTMATTER" | grep '^agent_name:' | sed 's/agent_name: *//')
+TASK_NUMBER=$(echo "$FRONTMATTER" | grep '^task_number:' | sed 's/task_number: *//')
+PR_NUMBER=$(echo "$FRONTMATTER" | grep '^pr_number:' | sed 's/pr_number: *//')
+ENABLED=$(echo "$FRONTMATTER" | grep '^enabled:' | sed 's/enabled: *//')
+
+# 检查是否启用
+if [[ "$ENABLED" != "true" ]]; then
+  exit 0
+fi
+
+# 发送通知给 coordinator
+NOTIFICATION="🤖 Agent ${AGENT_NAME} (Task ${TASK_NUMBER}, PR #${PR_NUMBER}) is idle."
+
+if tmux has-session -t "$COORDINATOR_SESSION" 2>/dev/null; then
+  tmux send-keys -t "$COORDINATOR_SESSION" "$NOTIFICATION" Enter
+fi
+
+exit 0
+```
+
+> **📎 参考来源**: [[19]](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-settings/references/real-world-examples.md)
+
+### 10.6 Agent Frontmatter 配置
+
+#### 基本配置
+
+```yaml
+---
+name: code-analyzer
+description: |
+  Analyze code quality and security issues.
+  
+  Examples:
+  - "analyze this codebase for security vulnerabilities"
+  - "check code quality metrics"
+  - "find potential bugs in the authentication module"
+model: sonnet
+color: blue
+---
+```
+
+**字段说明**：
+- `name`: 小写连字符格式，3-50 字符
+- `description`: 触发条件和示例
+- `model`: inherit/sonnet/opus/haiku
+- `color`: blue/cyan/green/yellow/magenta/red
+- `tools`: 可用工具列表（可选）
+
+> **📎 参考来源**: [[16]](https://context7.com/anthropics/claude-code/llms.txt)
+
+#### 带工具限制的配置
+
+```yaml
+---
+name: file-explorer
+description: Explore codebase structure
+model: haiku
+tools: [Read, Grep, Glob]
+---
+```
+
+### 10.7 Agent 开发工作流
+
+#### 1. 定义 Agent
+
+```bash
+# 创建 agent 目录
+mkdir -p ~/.claude/agents
+```
+
+#### 2. 创建 Agent 文件
+
+**文件**: `~/.claude/agents/database-agent.md`
+
+```markdown
+---
+name: database-agent
+description: |
+  Database schema design and migration specialist.
+  
+  Examples:
+  - "design database schema for user management"
+  - "create migration for new tables"
+  - "optimize database indexes"
+model: sonnet
+color: cyan
+tools: [Read, Write, Edit, Bash]
+---
+
+# Database Agent
+
+You are a database expert specializing in PostgreSQL schema design and migrations.
+
+## Capabilities
+
+- Design normalized database schemas
+- Create and test migrations
+- Optimize queries and indexes
+- Write comprehensive tests
+
+## Guidelines
+
+1. Always consider data integrity constraints
+2. Use appropriate data types
+3. Add indexes for frequently queried fields
+4. Write rollback migrations
+5. Test migrations before committing
+```
+
+#### 3. 在插件中注册 Agent
+
+**文件**: `manifest.json`
+
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "agents": ["./agents"]
+}
+```
+
+> **📎 参考来源**: [[16]](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-structure/references/manifest-reference.md)
+
+### 10.8 多 Agent 协作模式
+
+#### 模式 1: Leader-Worker
+
+```markdown
+---
+agent_name: team-leader
+task_number: 1
+enabled: true
+---
+
+# Team Leader
+
+Coordinate multiple agents to complete a feature.
+
+## Workflow
+
+1. Break down feature into tasks
+2. Assign tasks to specialized agents:
+   - database-agent: Schema design
+   - api-agent: REST endpoints
+   - test-agent: Test coverage
+3. Monitor progress
+4. Review and integrate results
+```
+
+#### 模式 2: Pipeline
+
+```markdown
+Agent 1 (Researcher) → Agent 2 (Designer) → Agent 3 (Implementer) → Agent 4 (Tester)
+```
+
+**依赖配置**：
+
+```yaml
+---
+agent_name: implementer
+dependencies: ["Task 1", "Task 2"]  # 等待 researcher 和 designer 完成
+---
+```
+
+#### 模式 3: Peer Collaboration
+
+```markdown
+多个 agent 同时工作于不同模块，通过共享状态文件协调
+```
+
+### 10.9 Agent 实用技巧
+
+#### 技巧 1: 后台运行长任务
+
+```json
+{
+  "subagent_type": "general-purpose",
+  "description": "运行完整测试套件",
+  "prompt": "运行所有单元测试和集成测试，生成覆盖率报告",
+  "run_in_background": true
+}
+```
+
+**检查进度**：
+```bash
+# 使用 TaskOutput 检查后台任务
+# 任务完成后会自动通知
+```
+
+#### 技巧 2: 选择合适的 Agent 类型
+
+```bash
+# 只需要搜索和探索 → 使用 Explore（快）
+Task(subagent_type="Explore", prompt="找到所有 API 端点定义")
+
+# 需要规划但不修改 → 使用 Plan
+Task(subagent_type="Plan", prompt="设计认证系统架构")
+
+# 需要执行 git 操作 → 使用 Bash
+Task(subagent_type="Bash", prompt="创建新分支并提交")
+
+# 复杂任务需要多种操作 → 使用 general-purpose
+Task(subagent_type="general-purpose", prompt="实现完整的登录功能")
+```
+
+#### 技巧 3: 模型选择优化
+
+```yaml
+# 简单任务 → haiku（快速、省钱）
+model: haiku
+task: "列出所有 TODO 注释"
+
+# 标准任务 → sonnet（推荐）
+model: sonnet
+task: "重构认证模块"
+
+# 复杂任务 → opus（最强）
+model: opus
+task: "设计整个微服务架构"
+```
+
+#### 技巧 4: Agent 通信模式
+
+```bash
+# 通过共享文件通信
+Agent 1: 写入 .claude/task-status.json
+Agent 2: 读取 .claude/task-status.json 获取状态
+
+# 通过 tmux session 通信
+Agent: 向 coordinator session 发送消息
+
+# 通过 PR 评论通信
+Agent: 在 GitHub PR 中留言协调
+```
+
+### 10.10 Agent Team 调试
+
+```bash
+# 1. 启动调试模式
+claude --debug
+
+# 2. 查看 agent 日志
+tail -f ~/.claude/logs/agent-*.log
+
+# 3. 检查状态文件
+cat .claude/multi-agent-swarm.local.md
+
+# 4. 监控 agent 输出
+# 使用 TaskOutput 查看后台 agent 的输出
+```
+
+---
+
 ## 🔗 参考资料
 
 1. [Claude Code 官方文档](https://context7.com/anthropics/claude-code/llms.txt) - CLI 完整功能概述
@@ -716,11 +1114,16 @@ description: 帮助用户做前端开发
 13. [安全配置文档](https://context7.com/anthropics/claude-code/llms.txt) - settings.json 完整选项
 14. [插件设置示例](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-settings/examples/create-settings-command.md) - 本地配置文件
 15. [Hook 模式参考](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/hook-development/references/patterns.md) - JSON 配置
+16. [Agent 开发文档](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/agent-development/SKILL.md) - Agent 基础和 Frontmatter
+17. [Hookify 命令文档](https://github.com/anthropics/claude-code/blob/main/plugins/hookify/commands/hookify.md) - Task tool 使用
+18. [插件设置 SKILL](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-settings/SKILL.md) - Multi-agent swarm 配置
+19. [实际应用示例](https://github.com/anthropics/claude-code/blob/main/plugins/plugin-dev/skills/plugin-settings/references/real-world-examples.md) - Agent idle 通知
 
 ---
 
 *📅 报告生成日期: 2026-02-20*  
 *🔍 研究方法: Context7 多轮深度检索*  
-*📊 检索轮数: 6 轮*  
-*📚 参考来源: 15 个官方文档*  
-*🤖 生成工具: Claude Code Research Skill*
+*📊 检索轮数: 10 轮*  
+*📚 参考来源: 19 个官方文档*  
+*🤖 生成工具: Claude Code Research Skill*  
+*🆕 更新内容: 新增 Agent Team 与多智能体协作章节*
